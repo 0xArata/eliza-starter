@@ -1,9 +1,15 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "module": "ESNext",
-    "lib": ["ESNext", "dom"],
-    "moduleResolution": "Bundler",
+    "module": "NodeNext",
+    "lib": [
+      "ESNext",
+      "dom"
+    ],
+    "types": [
+      "node"
+    ],
+    "moduleResolution": "nodenext",
     "outDir": "./dist",
     "rootDir": ".",
     "strict": false,
@@ -20,5 +26,19 @@
     "noEmitOnError": false,
     "moduleDetection": "force",
     "allowArbitraryExtensions": true
-  }
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.d.ts",
+    "types/**/*.test.ts"
+  ],
+  "ts-node": {
+      "experimentalSpecifierResolution": "node",
+      "transpileOnly": true,
+      "esm": true,
+    },
 }
