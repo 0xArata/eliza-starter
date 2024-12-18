@@ -110,6 +110,34 @@ TWITTER_PASSWORD=your_twitter_password
 TWITTER_EMAIL=your_twitter_email
 ```
 
+## Database Setup
+
+### PostgreSQL Configuration
+
+1. Set your PostgreSQL connection in `.env`:
+
+```env
+POSTGRES_URL="postgresql://user:password@localhost:5432/eliza"
+```
+
+2. Create and initialize the database:
+
+```bash
+# Create database
+psql -U postgres -c "CREATE DATABASE eliza;"
+
+# Apply schema
+psql -U postgres -d eliza -f schemaPsql.sql
+```
+
+3. To clean up the database (if needed):
+
+```bash
+psql -U postgres -d eliza -f cleanupPsql.sql
+```
+
+> Note: If no POSTGRES_URL is provided, the agent will default to SQLite storage.
+
 ## Custom Character Configuration
 
 To use a custom character configuration:
