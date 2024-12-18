@@ -1,8 +1,8 @@
-import { Character, ModelProviderName, defaultCharacter } from "@ai16z/eliza";
+import { Character, Clients, ModelProviderName, defaultCharacter } from "@ai16z/eliza";
 export const character: Character = {
     "name": "Bailoo",
     "plugins": [],
-    "clients": [],
+    "clients": [Clients.DIRECT],
     "modelProvider": ModelProviderName.OPENAI,
     "settings": {
             "secrets": {

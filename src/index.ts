@@ -1,44 +1,37 @@
 import { PostgresDatabaseAdapter } from "@ai16z/adapter-postgres";
 import { SqliteDatabaseAdapter } from "@ai16z/adapter-sqlite";
 import { AutoClientInterface } from "@ai16z/client-auto";
-import { DirectClientInterface } from "@ai16z/client-direct";
 import { DiscordClientInterface } from "@ai16z/client-discord";
 import { TelegramClientInterface } from "@ai16z/client-telegram";
 import { TwitterClientInterface } from "@ai16z/client-twitter";
-import { FarcasterAgentClient } from "@ai16z/client-farcaster";
 import {
     AgentRuntime,
     CacheManager,
     Character,
     Clients,
     DbCacheAdapter,
+    defaultCharacter,
+    elizaLogger,
     FsCacheAdapter,
     IAgentRuntime,
     ICacheManager,
     IDatabaseAdapter,
     IDatabaseCacheAdapter,
     ModelProviderName,
-    defaultCharacter,
-    elizaLogger,
     settings,
     stringToUuid,
     validateCharacterConfig,
 } from "@ai16z/eliza";
 import { bootstrapPlugin } from "@ai16z/plugin-bootstrap";
-
-import { confluxPlugin } from "@ai16z/plugin-conflux";
-import { imageGenerationPlugin } from "@ai16z/plugin-image-generation";
+import { DirectClient } from "@ai16z/client-direct";
 import { evmPlugin } from "@ai16z/plugin-evm";
 import { createNodePlugin } from "@ai16z/plugin-node";
-import { teePlugin } from "@ai16z/plugin-tee";
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
-import readline from "readline";
 import { fileURLToPath } from "url";
 import yargs from "yargs";
-import { debugPostgresConnection } from "./debugPost.ts";
-import { character as bailooCharacter } from "./character.ts";
+import { character } from "./character";
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
@@ -47,6 +40,12 @@ export const wait = (minTime: number = 1000, maxTime: number = 3000) => {
     const waitTime =
         Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
     return new Promise((resolve) => setTimeout(resolve, waitTime));
+};
+
+const logFetch = async (url: string, options: any) => {
+    elizaLogger.debug(`Fetching ${url}`);
+    elizaLogger.debug(JSON.stringify(options, null, 2));
+    return fetch(url, options);
 };
 
 export function parseArguments(): {
@@ -175,7 +174,7 @@ export async function loadCharacters(
 
     if (loadedCharacters.length === 0) {
         elizaLogger.info("No characters found, using default character");
-        loadedCharacters.push(bailooCharacter);
+        loadedCharacters.push(character);
     }
 
     return loadedCharacters;
@@ -259,86 +258,101 @@ export function getTokenForProvider(
                 character.settings?.secrets?.VOLENGINE_API_KEY ||
                 settings.VOLENGINE_API_KEY
             );
+        case ModelProviderName.NANOGPT:
+            return (
+                character.settings?.secrets?.NANOGPT_API_KEY ||
+                settings.NANOGPT_API_KEY
+            );
+        case ModelProviderName.HYPERBOLIC:
+            return (
+                character.settings?.secrets?.HYPERBOLIC_API_KEY ||
+                settings.HYPERBOLIC_API_KEY
+            );
+        case ModelProviderName.VENICE:
+            return (
+                character.settings?.secrets?.VENICE_API_KEY ||
+                settings.VENICE_API_KEY
+            );
+        case ModelProviderName.AKASH_CHAT_API:
+            return (
+                character.settings?.secrets?.AKASH_CHAT_API_KEY ||
+                settings.AKASH_CHAT_API_KEY
+            );
     }
 }
 
-async function initializeDatabase(dataDir: string): Promise<IDatabaseAdapter> {
+function initializeDatabase(dataDir: string) {
     if (process.env.POSTGRES_URL) {
         elizaLogger.info("Initializing PostgreSQL connection...");
-        try {
-            const debugSuccess = await debugPostgresConnection();
-            if (!debugSuccess) {
-                elizaLogger.error(
-                    "PostgreSQL connection check failed - falling back to SQLite"
-                );
-                const filePath =
-                    process.env.SQLITE_FILE ??
-                    path.resolve(dataDir, "db.sqlite");
-                return new SqliteDatabaseAdapter(new Database(filePath));
-            }
+        const db = new PostgresDatabaseAdapter({
+            connectionString: process.env.POSTGRES_URL,
+            parseInputs: true,
+        });
 
-            const db = new PostgresDatabaseAdapter({
-                connectionString: process.env.POSTGRES_URL,
-                parseInputs: true,
-                ssl: {
-                    rejectUnauthorized: false, // Add this for Supabase connections
-                },
+        // Test the connection
+        db.init()
+            .then(() => {
+                elizaLogger.success(
+                    "Successfully connected to PostgreSQL database"
+                );
+            })
+            .catch((error) => {
+                elizaLogger.error("Failed to connect to PostgreSQL:", error);
             });
 
-            await db.init();
-            elizaLogger.success(
-                "Successfully connected to PostgreSQL database"
-            );
-            return db;
-        } catch (error) {
-            elizaLogger.error("Failed to connect to PostgreSQL:", error);
-            // Fall back to SQLite
-            const filePath =
-                process.env.SQLITE_FILE ?? path.resolve(dataDir, "db.sqlite");
-            return new SqliteDatabaseAdapter(new Database(filePath));
-        }
+        return db;
     } else {
         const filePath =
             process.env.SQLITE_FILE ?? path.resolve(dataDir, "db.sqlite");
-        return new SqliteDatabaseAdapter(new Database(filePath));
+        // ":memory:";
+        const db = new SqliteDatabaseAdapter(new Database(filePath));
+        return db;
     }
 }
 
+// also adds plugins from character file into the runtime
 export async function initializeClients(
     character: Character,
     runtime: IAgentRuntime
 ) {
-    const clients = [];
-    const clientTypes =
+    // each client can only register once
+    // and if we want two we can explicitly support it
+    const clients: Record<string, any> = {};
+    const clientTypes: string[] =
         character.clients?.map((str) => str.toLowerCase()) || [];
+    elizaLogger.log("initializeClients", clientTypes, "for", character.name);
 
-    if (clientTypes.includes("auto")) {
+    if (clientTypes.includes(Clients.DIRECT)) {
         const autoClient = await AutoClientInterface.start(runtime);
-        if (autoClient) clients.push(autoClient);
+        if (autoClient) clients.auto = autoClient;
     }
 
-    if (clientTypes.includes("discord")) {
-        clients.push(await DiscordClientInterface.start(runtime));
+    if (clientTypes.includes(Clients.DISCORD)) {
+        const discordClient = await DiscordClientInterface.start(runtime);
+        if (discordClient) clients.discord = discordClient;
     }
 
-    if (clientTypes.includes("telegram")) {
+    if (clientTypes.includes(Clients.TELEGRAM)) {
         const telegramClient = await TelegramClientInterface.start(runtime);
-        if (telegramClient) clients.push(telegramClient);
+        if (telegramClient) clients.telegram = telegramClient;
     }
 
-    if (clientTypes.includes("twitter")) {
-        const twitterClients = await TwitterClientInterface.start(runtime);
-        clients.push(twitterClients);
+    if (clientTypes.includes(Clients.TWITTER)) {
+        const twitterClient = await TwitterClientInterface.start(runtime);
+
+        if (twitterClient) {
+            clients.twitter = twitterClient;
+            (twitterClient as any).enableSearch = !isFalsish(
+                getSecret(character, "TWITTER_SEARCH_ENABLE")
+            );
+        }
     }
 
-    if (clientTypes.includes("farcaster")) {
-        const farcasterClients = new FarcasterAgentClient(runtime);
-        farcasterClients.start();
-        clients.push(farcasterClients);
-    }
+    elizaLogger.log("client keys", Object.keys(clients));
 
     if (character.plugins?.length > 0) {
         for (const plugin of character.plugins) {
+            // if plugin has clients, add those..
             if (plugin.clients) {
                 for (const client of plugin.clients) {
                     clients.push(await client.start(runtime));
@@ -350,18 +364,43 @@ export async function initializeClients(
     return clients;
 }
 
+function isFalsish(input: any): boolean {
+    // If the input is exactly NaN, return true
+    if (Number.isNaN(input)) {
+        return true;
+    }
+
+    // Convert input to a string if it's not null or undefined
+    const value = input == null ? "" : String(input);
+
+    // List of common falsish string representations
+    const falsishValues = [
+        "false",
+        "0",
+        "no",
+        "n",
+        "off",
+        "null",
+        "undefined",
+        "",
+    ];
+
+    // Check if the value (trimmed and lowercased) is in the falsish list
+    return falsishValues.includes(value.trim().toLowerCase());
+}
+
 function getSecret(character: Character, secret: string) {
-    return character.settings.secrets?.[secret] || process.env[secret];
+    return character.settings?.secrets?.[secret] || process.env[secret];
 }
 
 let nodePlugin: any | undefined;
 
-export function createAgent(
+export async function createAgent(
     character: Character,
     db: IDatabaseAdapter,
     cache: ICacheManager,
     token: string
-) {
+): Promise<AgentRuntime> {
     elizaLogger.success(
         elizaLogger.successesTitle,
         "Creating runtime for character",
@@ -370,54 +409,51 @@ export function createAgent(
 
     nodePlugin ??= createNodePlugin();
 
+
     return new AgentRuntime({
         databaseAdapter: db,
         token,
         modelProvider: character.modelProvider,
         evaluators: [],
         character,
+        // character.plugins are handled when clients are added
         plugins: [
             bootstrapPlugin,
-            getSecret(character, "CONFLUX_CORE_PRIVATE_KEY")
-                ? confluxPlugin
-                : null,
             nodePlugin,
-            getSecret(character, "SOLANA_PUBLIC_KEY") ||
-            getSecret(character, "EVM_PRIVATE_KEY") ||
+            getSecret(character, "EVM_PUBLIC_KEY") ||
             (getSecret(character, "WALLET_PUBLIC_KEY") &&
-                !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
+                getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
                 ? evmPlugin
                 : null,
             getSecret(character, "FAL_API_KEY") ||
             getSecret(character, "OPENAI_API_KEY") ||
-            getSecret(character, "HEURIST_API_KEY")
-                ? imageGenerationPlugin
-                : null,
-            getSecret(character, "COINBASE_API_KEY") &&
-            getSecret(character, "COINBASE_PRIVATE_KEY") &&
-            getSecret(character, "WALLET_SECRET_SALT") ? teePlugin : null,
+            getSecret(character, "VENICE_API_KEY")
         ].filter(Boolean),
         providers: [],
         actions: [],
         services: [],
         managers: [],
         cacheManager: cache,
+        fetch: logFetch,
     });
 }
 
-function intializeFsCache(baseDir: string, character: Character) {
+function initializeFsCache(baseDir: string, character: Character) {
     const cacheDir = path.resolve(baseDir, character.id, "cache");
 
     const cache = new CacheManager(new FsCacheAdapter(cacheDir));
     return cache;
 }
 
-function intializeDbCache(character: Character, db: IDatabaseCacheAdapter) {
+function initializeDbCache(character: Character, db: IDatabaseCacheAdapter) {
     const cache = new CacheManager(new DbCacheAdapter(db, character.id));
     return cache;
 }
 
-async function startAgent(character: Character, directClient) {
+async function startAgent(
+    character: Character,
+    directClient
+): Promise<AgentRuntime> {
     let db: IDatabaseAdapter & IDatabaseCacheAdapter;
     try {
         character.id ??= stringToUuid(character.name);
@@ -430,27 +466,38 @@ async function startAgent(character: Character, directClient) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
 
-        db = (await initializeDatabase(dataDir)) as IDatabaseAdapter &
+        db = initializeDatabase(dataDir) as IDatabaseAdapter &
             IDatabaseCacheAdapter;
 
         await db.init();
 
-        const cache = intializeDbCache(character, db);
-        const runtime = createAgent(character, db, cache, token);
+        const cache = initializeDbCache(character, db);
+        const runtime: AgentRuntime = await createAgent(
+            character,
+            db,
+            cache,
+            token
+        );
 
+        // start services/plugins/process knowledge
         await runtime.initialize();
 
-        const clients = await initializeClients(character, runtime);
+        // start assigned clients
+        runtime.clients = await initializeClients(character, runtime);
 
+        // add to container
         directClient.registerAgent(runtime);
 
-        return clients;
+        // report to console
+        elizaLogger.debug(`Started ${character.name} as ${runtime.agentId}`);
+
+        return runtime;
     } catch (error) {
         elizaLogger.error(
             `Error starting agent for character ${character.name}:`,
             error
         );
-        console.error(error);
+        elizaLogger.error(error);
         if (db) {
             await db.close();
         }
@@ -459,15 +506,15 @@ async function startAgent(character: Character, directClient) {
 }
 
 const startAgents = async () => {
-    const directClient = await DirectClientInterface.start();
+    const directClient = new DirectClient();
+    const serverPort = parseInt(settings.SERVER_PORT || "3000");
     const args = parseArguments();
 
     let charactersArg = args.characters || args.character;
 
-    let characters = [bailooCharacter];
+    let characters = [character];
 
     if (charactersArg) {
-        elizaLogger.info("Loading characters from: ", charactersArg);
         characters = await loadCharacters(charactersArg);
     }
 
@@ -479,67 +526,18 @@ const startAgents = async () => {
         elizaLogger.error("Error starting agents:", error);
     }
 
-    function chat() {
-        const agentId = characters[0].name ?? "Agent";
-        rl.question("You: ", async (input) => {
-            await handleUserInput(input, agentId);
-            if (input.toLowerCase() !== "exit") {
-                chat(); // Loop back to ask another question
-            }
-        });
-    }
+    // upload some agent functionality into directClient
+    directClient.startAgent = async character => {
+      // wrap it so we don't have to inject directClient later
+      return startAgent(character, directClient)
+    };
+    directClient.start(serverPort);
 
-    elizaLogger.log("Chat started. Type 'exit' to quit.");
-    if (!args["non-interactive"]) {
-        chat();
-    }
+    elizaLogger.log("Visit the following URL to chat with your agents:");
+    elizaLogger.log(`http://localhost:5173`);
 };
 
 startAgents().catch((error) => {
     elizaLogger.error("Unhandled error in startAgents:", error);
     process.exit(1); // Exit the process after logging
 });
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-});
-
-async function handleUserInput(input, agentId) {
-    if (input.toLowerCase() === "exit") {
-        gracefulExit();
-    }
-
-    try {
-        const serverPort = parseInt(settings.SERVER_PORT || "3000");
-
-        const response = await fetch(
-            `http://localhost:${serverPort}/${agentId}/message`,
-            {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    text: input,
-                    userId: "user",
-                    userName: "User",
-                }),
-            }
-        );
-
-        const data = await response.json();
-        data.forEach((message) =>
-            elizaLogger.log(`${"Agent"}: ${message.text}`)
-        );
-    } catch (error) {
-        console.error("Error fetching response:", error);
-    }
-}
-
-async function gracefulExit() {
-    elizaLogger.log("Terminating and cleaning up resources...");
-    rl.close();
-    process.exit(0);
-}
-
-rl.on("SIGINT", gracefulExit);
-rl.on("SIGTERM", gracefulExit);

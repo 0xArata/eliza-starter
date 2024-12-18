@@ -6,12 +6,9 @@
       "ESNext",
       "dom"
     ],
-    "types": [
-      "node"
-    ],
     "moduleResolution": "Bundler",
     "outDir": "./dist",
-    "rootDir": ".",
+    "rootDir": "./src",
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -26,23 +23,18 @@
     "noEmitOnError": false,
     "moduleDetection": "force",
     "allowArbitraryExtensions": true,
-    "baseUrl": ".",
-    "paths": {
-      "@ai16z/*": ["node_modules/@ai16z/*"]
-    }
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/types"
+    ]
   },
   "include": [
-    "src"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
     "src/**/*.d.ts",
     "types/**/*.test.ts"
-  ],
-  "ts-node": {
-      "experimentalSpecifierResolution": "node",
-      "transpileOnly": true,
-      "esm": true,
-    },
-}
+  ]
+} 
